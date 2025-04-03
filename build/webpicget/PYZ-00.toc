@@ -1,4 +1,4 @@
-('/home/k310/web_image_downloader/build/webpicget/PYZ-00.pyz',
+('/home/k310/WebPicGet/build/webpicget/PYZ-00.pyz',
  [('__future__', '/usr/lib/python3.11/__future__.py', 'PYMODULE'),
   ('_aix_support', '/usr/lib/python3.11/_aix_support.py', 'PYMODULE'),
   ('_bootsubprocess', '/usr/lib/python3.11/_bootsubprocess.py', 'PYMODULE'),

@@ -8,6 +8,25 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 import time
+from urllib.parse import urlparse
+import mimetypes
+
+def get_file_extension(url):
+    """ URL から拡張子を取得する (なければ Content-Type をチェック) """
+    parsed_url = urlparse(url)
+    ext = os.path.splitext(parsed_url.path)[1]  # ".jpg" ".png" など
+    
+    if ext:  # 拡張子が取得できたらそれを使う
+        return ext
+
+    # 拡張子がない場合は Content-Type から推測
+    try:
+        response = requests.head(url, allow_redirects=True)
+        content_type = response.headers.get("Content-Type", "")
+        ext = mimetypes.guess_extension(content_type)
+        return ext if ext else ".jpg"  # 不明なら jpg にする
+    except:
+        return ".jpg"
 
 def download_images(url, download_folder=None):
 
@@ -17,7 +36,7 @@ def download_images(url, download_folder=None):
     # WebDriverの初期化 (Chromeを使用)
     service = Service()
     options = webdriver.ChromeOptions()
-    options.add_argument('--headless')  # ヘッドレスモードで実行する場合
+    options.add_argument('--headless')  # ヘッドレスモードで実行する
     driver = webdriver.Chrome(service=service, options=options)
 
     # Webページの読み込み
@@ -32,8 +51,7 @@ def download_images(url, download_folder=None):
     img_urls = [img['src'] for img in img_tags if img.get('src')]
 
     # ダウンロードフォルダの作成
-    if not os.path.exists(download_folder):
-        os.makedirs(download_folder)
+    os.makedirs(download_folder, exist_ok=True)
 
     # 画像をダウンロード
     for i, img_url in enumerate(img_urls):
@@ -42,11 +60,17 @@ def download_images(url, download_folder=None):
             if not img_url.startswith('http'):
                 img_url = url + img_url if url.endswith('/') else url + '/' + img_url
 
-            img_data = requests.get(img_url).content
-            file_name = os.path.join(download_folder, f"image_{i+1:03d}.jpg")
+            # 拡張子を取得
+            ext = get_file_extension(img_url)
 
+            # 保存ファイル名
+            file_name = os.path.join(download_folder, f"image_{i+1:03d}{ext}")
+
+            # 画像をダウンロード
+            img_data = requests.get(img_url).content
             with open(file_name, 'wb') as f:
                 f.write(img_data)
+
             print(f"Downloaded: {file_name}")
 
         except Exception as e:

@@ -3,7 +3,7 @@ Download the **img tag** file on the website.
 ## Installation
 ```
 git clone https://github.com/k310sto/WebPicGet.git
-mv ./WebPicGet/webpicget ~/.local/bin/
+cp ./WebPicGet/webpicget ~/.local/bin/
 ```
 ## Usage
 ```

@@ -2,14 +2,26 @@
 
 import os
 import sys
+import subprocess
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 import time
 from urllib.parse import urlparse
 import mimetypes
+
+def get_executable_path(executable_name):
+    """指定された実行ファイルのパスを which コマンドで取得する"""
+    try:
+        result = subprocess.run(['which', executable_name], capture_output=True, text=True, check=True)
+        path = result.stdout.strip()
+        return path
+    except subprocess.CalledProcessError:
+        print(f"警告: {executable_name} が見つかりませんでした。")
+        return None
 
 def get_file_extension(url):
     """ URL から拡張子を取得する (なければ Content-Type をチェック) """
@@ -32,12 +44,6 @@ def download_images(url, download_folder=None):
 
     if download_folder is None:
         download_folder = "images"
-
-    # WebDriverの初期化 (Chromeを使用)
-    service = Service()
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')  # ヘッドレスモードで実行する
-    driver = webdriver.Chrome(service=service, options=options)
 
     # Webページの読み込み
     driver.get(url)
@@ -85,5 +91,16 @@ if __name__ == "__main__":
 
     url = sys.argv[1]
     download_folder = sys.argv[2] if len(sys.argv) > 2 else None
+
+    # Chromium と ChromeDriver のパスを動的に取得
+    chromium_path = get_executable_path("chromium")
+    chromedriver_path = get_executable_path("chromedriver")
+
+    # WebDriverの初期化 (Chromiumを使用)
+    service = Service(executable_path=chromedriver_path)
+    options = Options()
+    options.binary_location = chromium_path
+    options.add_argument('--headless')  # ヘッドレスモードで実行する場合
+    driver = webdriver.Chrome(service=service, options=options)
 
     download_images(url, download_folder)

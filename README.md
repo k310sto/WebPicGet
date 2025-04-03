@@ -1,7 +1,9 @@
 # Website Pictures Getter
 Download the **img tag** file on the website.
-## Installation
+## Installation(debian12)
 ```
+sudo apt update
+sudo apt install chromium
 git clone https://github.com/k310sto/WebPicGet.git
 cp ./WebPicGet/webpicget ~/.local/bin/
 ```

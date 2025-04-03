@@ -10,24 +10,28 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import mimetypes
+import re
+from tqdm import tqdm
 
 def get_executable_path(executable_name):
     """指定された実行ファイルのパスを which コマンドで取得する"""
     try:
+        sys.stdout.write("\033[2K\r")
+        print(f"\rSearching for {executable_name}...", end="")
         result = subprocess.run(['which', executable_name], capture_output=True, text=True, check=True)
         path = result.stdout.strip()
         return path
     except subprocess.CalledProcessError:
-        print(f"警告: {executable_name} が見つかりませんでした。")
+        print(f"\r警告: {executable_name} が見つかりませんでした。")
         return None
 
 def get_file_extension(url):
     """ URL から拡張子を取得する (なければ Content-Type をチェック) """
     parsed_url = urlparse(url)
     ext = os.path.splitext(parsed_url.path)[1]  # ".jpg" ".png" など
-    
+
     if ext:  # 拡張子が取得できたらそれを使う
         return ext
 
@@ -40,47 +44,68 @@ def get_file_extension(url):
     except:
         return ".jpg"
 
+def sanitize_filename(filename):
+    """ファイル名として安全な文字列に変換する"""
+    return re.sub(r'[^\w\-_.]', '_', filename)
+
 def download_images(url, download_folder=None):
 
     if download_folder is None:
         download_folder = "images"
 
     # Webページの読み込み
+    sys.stdout.write("\033[2K\r")
+    print(f"\rLoading page...", end="")
     driver.get(url)
     time.sleep(5)  # ページの読み込みを待機
 
     # BeautifulSoupでページを解析
+    sys.stdout.write("\033[2K\r")
+    print(f"\rAnalyzing page...", end="")
     soup = BeautifulSoup(driver.page_source, 'html.parser')
 
     # 画像のURLを取得
+    sys.stdout.write("\033[2K\r")
+    print(f"\rImage data is being acquired...", end="")
     img_tags = soup.find_all('img')
-    img_urls = [img['src'] for img in img_tags if img.get('src')]
+    img_urls = [(img.get('src'), img.get('alt')) for img in img_tags if img.get('src')]
+
+    # 画像の合計数を表示
+    total_images = len(img_urls)
+    success = total_images
 
     # ダウンロードフォルダの作成
     os.makedirs(download_folder, exist_ok=True)
 
     # 画像をダウンロード
-    for i, img_url in enumerate(img_urls):
+    for i, (img_src, alt_text) in tqdm(enumerate(img_urls), total=total_images, desc="Downloading", unit="images"):
         try:
             # 相対URLを絶対URLに変換
-            if not img_url.startswith('http'):
-                img_url = url + img_url if url.endswith('/') else url + '/' + img_url
+            img_url = urljoin(url, img_src)
 
             # 拡張子を取得
             ext = get_file_extension(img_url)
 
-            # 保存ファイル名
-            file_name = os.path.join(download_folder, f"image_{i+1:03d}{ext}")
+            # ファイル名を決定
+            if alt_text:
+                file_name = sanitize_filename(alt_text) + ext
+            else:
+                file_name = sanitize_filename(os.path.basename(urlparse(img_url).path)) + ext
+
+            file_name = os.path.join(download_folder, file_name)
 
             # 画像をダウンロード
             img_data = requests.get(img_url).content
             with open(file_name, 'wb') as f:
                 f.write(img_data)
 
-            print(f"Downloaded: {file_name}")
-
         except Exception as e:
-            print(f"Error downloading {img_url}: {e}")
+            print(f"\rError downloading {img_url}: {e}")
+            success -= 1
+
+    print(f"\rdownloaded {success} images.")
+
+    #print()  # 改行
 
     driver.quit()
 
@@ -96,11 +121,15 @@ if __name__ == "__main__":
     chromium_path = get_executable_path("chromium")
     chromedriver_path = get_executable_path("chromedriver")
 
-    # WebDriverの初期化 (Chromiumを使用)
-    service = Service(executable_path=chromedriver_path)
-    options = Options()
-    options.binary_location = chromium_path
-    options.add_argument('--headless')  # ヘッドレスモードで実行する場合
-    driver = webdriver.Chrome(service=service, options=options)
-
-    download_images(url, download_folder)
+    if chromium_path != None and chromedriver_path != None:
+        # WebDriverの初期化 (Chromiumを使用)
+        sys.stdout.write("\033[2K\r")
+        print(f"\rChromium is starting...", end="") 
+        service = Service(executable_path=chromedriver_path)
+        options = Options()
+        options.binary_location = chromium_path
+        options.add_argument('--headless')  # ヘッドレスモードで実行する場合
+        driver = webdriver.Chrome(service=service, options=options)
+        download_images(url, download_folder)
+    else:
+        sys.exit(1)

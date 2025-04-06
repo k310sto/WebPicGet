@@ -10,10 +10,50 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 import time
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, unquote
 import mimetypes
 import re
 from tqdm import tqdm
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import base64
+import hashlib
+
+def download_image_with_retry(url, file_name, retries=10, backoff_factor=0.5):
+    session = requests.Session()
+    retry = Retry(total=retries, read=retries, connect=retries,
+                  backoff_factor=backoff_factor,
+                  status_forcelist=(500, 502, 503, 504))
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+
+    try:
+        response = session.get(url, stream=True, timeout=(10, 30))
+        response.raise_for_status()  # Raise an exception for bad status codes
+        with open(file_name, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return True
+    except requests.exceptions.RequestException as e:
+        print(f"\rError downloading {url}: {e}")
+        return False
+
+def download_base64_image(data_url, file_path):
+    try:
+        header, encoded = data_url.split(',', 1)
+        mime_type = header.split(';')[0].split(':')[1]
+        extension = mimetypes.guess_extension(mime_type)
+        if not extension:
+            extension = ".png"  # デフォルト拡張子
+
+        image_data = base64.b64decode(encoded)
+        with open(file_path + extension, "wb") as f:
+            f.write(image_data)
+        return True
+    except Exception as e:
+        print(f"\rError decoding and saving base64 image: {e}")
+        return False
 
 def get_executable_path(executable_name):
     """指定された実行ファイルのパスを which コマンドで取得する"""
@@ -32,21 +72,26 @@ def get_file_extension(url):
     parsed_url = urlparse(url)
     ext = os.path.splitext(parsed_url.path)[1]  # ".jpg" ".png" など
 
-    if ext:  # 拡張子が取得できたらそれを使う
-        return ext
+    if ext and ext.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+        return ext.lower()
 
     # 拡張子がない場合は Content-Type から推測
     try:
-        response = requests.head(url, allow_redirects=True)
+        response = requests.head(url, allow_redirects=True, timeout=5)
         content_type = response.headers.get("Content-Type", "")
         ext = mimetypes.guess_extension(content_type)
-        return ext if ext else ".jpg"  # 不明なら jpg にする
-    except:
+        return ext.lower() if ext and ext.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp'] else ".jpg"
+    except requests.exceptions.RequestException:
         return ".jpg"
 
 def sanitize_filename(filename):
     """ファイル名として安全な文字列に変換する"""
     return re.sub(r'[^\w\-_.]', '_', filename)
+
+def normalize_url(url_string):
+    """URLを正規化する（必要に応じて）"""
+    parsed = urlparse(url_string)
+    return parsed.geturl()
 
 def download_images(url, download_folder=None):
 
@@ -56,84 +101,133 @@ def download_images(url, download_folder=None):
     # Webページの読み込み
     sys.stdout.write("\033[2K\r")
     print(f"\rLoading page...", end="")
-    driver.get(url)
-    time.sleep(5)  # ページの読み込みを待機
+    try:
+        driver.get(url)
+        time.sleep(6)  # ページの読み込みを待機
+    except Exception as e:
+        print(f"\rError loading page: {e}")
+        return
 
     # BeautifulSoupでページを解析
     sys.stdout.write("\033[2K\r")
     print(f"\rAnalyzing page...", end="")
     soup = BeautifulSoup(driver.page_source, 'html.parser')
 
-    # 画像のURLを取得
+    # 画像のURLを取得 (重複排除)
     sys.stdout.write("\033[2K\r")
     print(f"\rImage data is being acquired...", end="")
     img_tags = soup.find_all('img')
-    img_urls = [(img.get('src'), img.get('alt')) for img in img_tags if img.get('src')]
+    img_urls = set()
+    for img in img_tags:
+        src = img.get('src')
+        alt = img.get('alt')
+        if src:
+            absolute_url = urljoin(url, src)
+            decoded_url = unquote(absolute_url)
+            img_urls.add((decoded_url, alt))
 
-    # 画像の合計数を表示
-    total_images = len(img_urls)
-    success = total_images
+    img_list = list(img_urls)
+    total_images = len(img_list)
+    success = 0
+    failed = 0
 
     # ダウンロードフォルダの作成
     os.makedirs(download_folder, exist_ok=True)
 
+    # 保存されたファイル名を追跡
+    downloaded_files = set()
+    file_name_counts = {}
+
+    # Base64 画像のカウンタ
+    base64_counter = 1
+
     # 画像をダウンロード
-    for i, (img_src, alt_text) in tqdm(enumerate(img_urls), total=total_images, desc="Downloading", unit="images"):
+    for i, (img_src, alt_text) in tqdm(enumerate(img_list), total=total_images, desc="Downloading", unit="images"):
         try:
-            # 相対URLを絶対URLに変換
-            img_url = urljoin(url, img_src)
+            if img_src.startswith("data:image"):
+                mime_type = img_src.split(';')[0].split(':')[1]
+                extension = mimetypes.guess_extension(mime_type)
+                if not extension:
+                    extension = ".png"
+                base_file_name = f"base64_{base64_counter}"
+                file_name = base_file_name + extension
+                full_file_path = os.path.join(download_folder, file_name)
 
-            # 拡張子を取得
-            ext = get_file_extension(img_url)
+                # ファイル名が重複する場合は連番を追加
+                while full_file_path in downloaded_files:
+                    base64_counter += 1
+                    base_file_name = f"base64_{base64_counter}"
+                    file_name = base_file_name + extension
+                    full_file_path = os.path.join(download_folder, file_name)
 
-            # ファイル名を決定
-            if alt_text:
-                file_name = sanitize_filename(alt_text) + ext
+                if download_base64_image(img_src, os.path.splitext(full_file_path)[0]): # 拡張子なしで渡す
+                    downloaded_files.add(full_file_path)
+                    base64_counter += 1
+                    success += 1
+                else:
+                    failed += 1
             else:
-                file_name = sanitize_filename(os.path.basename(urlparse(img_url).path)) + ext
+                ext = get_file_extension(img_src)
+                if alt_text:
+                    file_name_base = sanitize_filename(alt_text)
+                else:
+                    file_name_base = sanitize_filename(os.path.basename(urlparse(img_src).path))
 
-            file_name = os.path.join(download_folder, file_name)
+                file_name = file_name_base + ext
+                full_file_path = os.path.join(download_folder, file_name)
 
-            # 画像をダウンロード
-            img_data = requests.get(img_url).content
-            with open(file_name, 'wb') as f:
-                f.write(img_data)
+                # ファイル名が重複する場合は連番を追加
+                name, extension = os.path.splitext(full_file_path)
+                counter = 1
+                while full_file_path in downloaded_files:
+                    full_file_path = f"{name}_{counter}{extension}"
+                    counter += 1
+
+                if download_image_with_retry(img_src, full_file_path):
+                    downloaded_files.add(full_file_path)
+                    success += 1
+                else:
+                    failed += 1
 
         except Exception as e:
-            print(f"\rError downloading {img_url}: {e}")
-            success -= 1
+            print(f"\rError processing {img_src}: {e}")
+            failed += 1
 
-    print(f"\rdownloaded {success} images.")
-
-    #print()  # 改行
+    print(f"\rdownloaded {success} images (failed: {failed}).")
 
     driver.quit()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: webpicget <url> [download_folder]")
-        sys.exit(1)
+    try:
+        if len(sys.argv) < 2:
+            print("Usage: webpicget "<url>" [download_folder]")
+            sys.exit(1)
 
-    url = sys.argv[1]
-    download_folder = sys.argv[2] if len(sys.argv) > 2 else None
+        url = sys.argv[1]
+        download_folder = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # Chromium と ChromeDriver のパスを動的に取得
-    chromium_path = get_executable_path("chromium")
-    chromedriver_path = get_executable_path("chromedriver")
+        # Chromium と ChromeDriver のパスを動的に取得
+        chromium_path = get_executable_path("chromium")
+        chromedriver_path = get_executable_path("chromedriver")
 
-    if chromium_path != None and chromedriver_path != None:
-        # WebDriverの初期化 (Chromiumを使用)
-        sys.stdout.write("\033[2K\r")
-        print(f"\rChromium is starting...", end="") 
-        service = Service(executable_path=chromedriver_path)
-        options = Options()
-        options.binary_location = chromium_path
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
+        if chromium_path != None and chromedriver_path != None:
+            # WebDriverの初期化 (Chromiumを使用)
+            sys.stdout.write("\033[2K\r")
+            print(f"\rChromium is starting...", end="")
+            service = Service(executable_path=chromedriver_path)
+            options = Options()
+            options.binary_location = chromium_path
+            options.add_argument('--headless')
+            #options.add_argument('--no-sandbox')
+            #options.add_argument('--disable-dev-shm-usage')
+            #options.add_argument('--disable-gpu')
 
-        driver = webdriver.Chrome(service=service, options=options)
-        download_images(url, download_folder)
-    else:
-        sys.exit(1)
+            driver = webdriver.Chrome(service=service, options=options)
+            download_images(url, download_folder)
+        else:
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print("\r\nスクリプトを停止しました")
+        if 'driver' in locals():
+            driver.quit()
+        sys.exit(0)

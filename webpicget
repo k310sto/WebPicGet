@@ -200,7 +200,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Website Pictures Getter")
     parser.add_argument("url", nargs="?", help="URL to access (Recommendation:If omitted, interactive input)")
     parser.add_argument("-d","--dir", dest="download_dir", default="images", help="download directory (default:\"images\")")
-    parser.add_argument("-t","--time", type=int, default=120, help="Timeout in seconds (default:120s)")
+    parser.add_argument("-t","--time", dest="timeout", type=int, default=120, help="Timeout in seconds (default:120s)")
 
     args = parser.parse_args()
 
